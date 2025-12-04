@@ -1,6 +1,5 @@
-
 import { GoogleGenAI, Chat, Type, Schema } from "@google/genai";
-import { TEACHER_SYSTEM_INSTRUCTION, QUIZ_DATA } from '../constants';
+import { TEACHER_SYSTEM_INSTRUCTION } from '../constants';
 import { Question, QuestionCategory } from '../types';
 
 let chatSession: Chat | null = null;
@@ -115,35 +114,28 @@ export const generateQuizFromMedia = async (files: File | File[]): Promise<Quest
     }
   }
 
-  // Extract existing questions to avoid duplicates
-  const existingQuestions = QUIZ_DATA.map(q => q.text).join("\n");
-
   const prompt = `
-    あなたは非常に厳格で優秀な日本の「理科の先生」です。
-    提供された画像（資料やテスト）の内容を詳細に読み取り、生徒のための復習テストを作成してください。
+    あなたはベテランの「理科の先生」です。
+    提供された資料（画像・PDF）の内容を詳細に分析し、生徒の理解度を深めるための「最適な復習テスト」を作成してください。
 
-    【重要：言語について】
-    **全ての質問、選択肢、解説は必ず「日本語」で出力してください。**
+    【目的】
+    資料にある問題をそのまま写すのではなく、資料のトピックに基づいた**バランスの良い良質な問題**を生成してください。
 
-    【除外リスト】
-    以下の質問は既に存在します。これらと内容が完全に重複する問題は作成しないでください（似ているが違う視点の問題はOKです）：
-    ${existingQuestions.slice(0, 5000)}... (省略)
+    【難易度と構成の指示】
+    以下のバランスで問題を作成してください：
+    1. **基礎（約30%）**: 用語の確認や、一問一答形式で答えられる基本的な事実。
+    2. **標準（約50%）**: 現象の仕組みや理由、因果関係を問う問題（例：「なぜそうなるのか」）。
+    3. **応用（約20%）**: 複数の知識を組み合わせたり、少しひねった視点から問う問題。
 
-    【指示】
-    1. **詳細な分析**: 資料内のすべてのテキスト、グラフ、図表のラベルを読み取ってください。
-    2. **量**: 資料の内容を網羅するように、**50問から80問**の高品質な多肢選択問題を作成してください。
-       - 出力が途切れないよう、解説は簡潔かつ的確にまとめてください。
-    3. **質**: 単なる用語の暗記だけでなく、グラフの読み取りや因果関係（例：太陽高度と気温の関係）を問う問題を含めてください。
-    4. **解説**: なぜその答えが正解なのかを、小学生〜中学生にもわかるように丁寧に解説してください。
-    5. **カテゴリ**: 以下のいずれかを割り当ててください：'天体・季節', '光と影', '生物', 'その他'。
-
-    【最重要：図表問題のテキスト化（NO_VISUAL_REFERENCES）】
-    - ユーザーは問題を解く際に、元の画像を見ることができません。
-    - **「図1を見て答えなさい」や「グラフAの記号はどれか」といった問題は絶対に作らないでください。**
-    - **図やグラフの状況を「文章」で説明して問題にしてください。**
-      - 悪い例：「図1のAの位置にあるとき、季節はどれか？」
-      - 良い例：「地球の地軸が太陽の方向に傾いているとき、北半球の季節はどうなるか？」
-      - 良い例：「気温のグラフが14時ごろにピークになっているとき、地温のピークはいつ頃か？」
+    【重要：作成ルール】
+    1. **言語**: 全て日本語で作成してください。
+    2. **出題範囲**: 提供された資料に含まれる単元・テーマに基づいてください。
+    3. **脱・視覚依存（NO_VISUAL_REFERENCES）**: 
+       - ユーザーは元の画像を見ずに問題を解きます。
+       - **「図1を見て答えなさい」「グラフAの記号を選べ」といった問題は禁止です。**
+       - 状況を文章で完全に説明してください（例：「北半球で太陽の南中高度が最も高くなる日について...」）。
+    4. **解説**: 正解の理由だけでなく、間違えやすいポイントや補足知識も含めた丁寧な解説を記述してください。
+    5. **量**: 資料の内容を網羅できるように、最大50問まで作成してください。
 
     JSON形式の配列で出力してください。Markdown記法は含めないでください。
   `;
@@ -181,7 +173,7 @@ export const generateQuizFromMedia = async (files: File | File[]): Promise<Quest
       config: {
         responseMimeType: "application/json",
         responseSchema: quizSchema,
-        maxOutputTokens: 32768, // Max tokens to allow large response (100+ questions)
+        maxOutputTokens: 32768, 
         thinkingConfig: { thinkingBudget: 0 }, 
       }
     });
@@ -206,7 +198,7 @@ export const generateQuizFromMedia = async (files: File | File[]): Promise<Quest
     }
 
     return rawData.map((q: any) => ({
-      id: q.id, // ID will be reassigned in App.tsx to ensure uniqueness
+      id: q.id, // ID will be reassigned in App.tsx
       category: q.category as QuestionCategory,
       text: q.text,
       options: q.options,

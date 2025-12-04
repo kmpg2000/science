@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { QuizCard } from './components/QuizCard';
 import { ResultSummary } from './components/ResultSummary';
@@ -13,7 +14,7 @@ type AppState = 'home' | 'loading' | 'quiz' | 'result';
 // Versioning Logic
 // In a Vercel environment, VERCEL_GIT_COMMIT_SHA is injected at build time.
 // We use the first 7 characters as a dynamic build ID.
-const APP_VERSION = 'v1.4.0';
+const APP_VERSION = 'v1.4.1';
 // Fix: Cast import.meta to any to satisfy TS compiler regarding 'env' property
 const GIT_SHA = (import.meta as any).env?.VITE_VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || '';
 const BUILD_ID = GIT_SHA ? GIT_SHA.slice(0, 7) : 'dev-' + new Date().toISOString().split('T')[0].replace(/-/g,'');
@@ -26,6 +27,16 @@ const ENCOURAGEMENT_MESSAGES = [
   "限界を超えろ！君の成長はここからだ！",
   "いいぞ！知識が血となり肉となっている！"
 ];
+
+// Fisher-Yates shuffle algorithm
+const shuffleArray = <T,>(array: T[]): T[] => {
+  const newArray = [...array];
+  for (let i = newArray.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+  }
+  return newArray;
+};
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>('home');
@@ -142,7 +153,16 @@ const App: React.FC = () => {
 
   const handleRetry = () => {
     safePlayClick();
-    resetToHome();
+    // If retry is clicked, we restart the quiz with the CURRENT quizData
+    // This allows retrying the generated quiz without reloading it
+    setAppState('quiz');
+    setCurrentQuestionIndex(0);
+    setSelectedOption(null);
+    setShowFeedback(false);
+    setScore(0);
+    setShowEncouragement(false);
+    setShowExitConfirmation(false);
+    window.scrollTo(0, 0);
   };
 
   // Logic for the Logo Click & Return to Home Button
@@ -184,18 +204,14 @@ const App: React.FC = () => {
       const questions = await generateQuizFromMedia(fileArray);
       
       if (questions && questions.length > 0) {
-        // Re-assign IDs to avoid collision with existing data
-        const startingId = DEFAULT_QUIZ_DATA.length > 0 
-          ? Math.max(...DEFAULT_QUIZ_DATA.map(q => q.id)) + 1 
-          : 1;
-
+        // Re-assign IDs starting from 1 since we are replacing the dataset completely
         const processedNewQuestions = questions.map((q, index) => ({
           ...q,
-          id: startingId + index
+          id: index + 1
         }));
 
-        // Append to default data instead of replacing
-        setQuizData([...DEFAULT_QUIZ_DATA, ...processedNewQuestions]);
+        // Replace default data with new questions (do not append)
+        setQuizData(processedNewQuestions);
         
         setCurrentQuestionIndex(0);
         setScore(0);
@@ -216,7 +232,9 @@ const App: React.FC = () => {
 
   const startDefaultQuiz = () => {
     try { playDrum(); } catch (e) {}
-    setQuizData(DEFAULT_QUIZ_DATA);
+    // Shuffle the default data so categories are mixed
+    const shuffledData = shuffleArray(DEFAULT_QUIZ_DATA);
+    setQuizData(shuffledData);
     setCurrentQuestionIndex(0);
     setScore(0);
     setSelectedOption(null);
@@ -379,7 +397,7 @@ const App: React.FC = () => {
       <p className="text-base text-gray-600 font-maru">
         全集中・思考の呼吸...<br/>
         <span className="text-xs text-gray-500 mt-2 block">
-          (資料が多い場合、5分程度かかることがあります)
+          (資料が多い場合、1分程度かかることがあります)
         </span>
       </p>
     </div>
