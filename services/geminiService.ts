@@ -3,20 +3,59 @@ import { TEACHER_SYSTEM_INSTRUCTION } from '../constants';
 import { Question, QuestionCategory } from '../types';
 
 let chatSession: Chat | null = null;
+let genAI: GoogleGenAI | null = null;
 
-// Initialize GoogleGenAI with the API key from process.env as per guidelines.
-// The apiKey is assumed to be pre-configured and valid.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Helper to reliably find the API Key in various environments (Vite, Vercel, etc.)
+const getApiKey = (): string | undefined => {
+  // 1. Try standard process.env (Node/Webpack/Next.js)
+  if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    return process.env.API_KEY;
+  }
+  // 2. Try Vite specific import.meta.env
+  // @ts-ignore
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
+    // @ts-ignore
+    return import.meta.env.VITE_API_KEY;
+  }
+  // 3. Try Vercel System Env accessed via standard env var in some configs
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    return process.env.NEXT_PUBLIC_API_KEY;
+  }
+  
+  return undefined;
+};
+
+export const initializeGemini = () => {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.error("API Key is missing. Please set VITE_API_KEY or API_KEY in your environment variables.");
+    return;
+  }
+  genAI = new GoogleGenAI({ apiKey });
+};
 
 export const getTeacherResponse = async (userMessage: string): Promise<string> => {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return "システムエラー: APIキーが設定されていません。管理者にお問い合わせください。";
+  }
+
+  if (!genAI) {
+    initializeGemini();
+  }
+
   try {
-    if (!chatSession) {
-      chatSession = ai.chats.create({
+    if (!chatSession && genAI) {
+      chatSession = genAI.chats.create({
         model: 'gemini-2.5-flash',
         config: {
           systemInstruction: TEACHER_SYSTEM_INSTRUCTION,
         },
       });
+    }
+
+    if (!chatSession) {
+        throw new Error("Chat session could not be initialized.");
     }
 
     const result = await chatSession.sendMessage({ message: userMessage });
@@ -53,34 +92,34 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   });
 };
 
-export const generateQuizFromMedia = async (files: File[]): Promise<Question[]> => {
-  if (files.length === 0) {
-    throw new Error("ファイルが選択されていません。");
+export const generateQuizFromMedia = async (file: File): Promise<Question[]> => {
+  const apiKey = getApiKey();
+  if (!genAI) initializeGemini();
+  if (!genAI || !apiKey) {
+    throw new Error("APIキーが見つかりません。環境設定を確認してください。");
   }
 
-  // File size check for each file
-  for (const file of files) {
-    if (file.size > 20 * 1024 * 1024) {
-      throw new Error(`ファイル「${file.name}」が大きすぎます。20MB以下のファイルを選択してください。`);
-    }
+  // File size check (Client-side limit precaution, though Gemini supports up to 20MB usually)
+  if (file.size > 20 * 1024 * 1024) {
+    throw new Error("ファイルサイズが大きすぎます。20MB以下のファイルを選択してください。");
   }
 
-  let mediaParts;
+  let mediaPart;
   try {
-    mediaParts = await Promise.all(files.map(file => fileToGenerativePart(file)));
+    mediaPart = await fileToGenerativePart(file);
   } catch (e) {
     throw new Error("ファイルの読み込みに失敗しました。");
   }
 
   const prompt = `
     あなたは非常に厳格で優秀な日本の「理科の先生」です。
-    提供された複数の資料（画像やテスト、教科書など）の内容を詳細に読み取り、生徒のための復習テストを作成してください。
+    提供された画像（資料やテスト）の内容を詳細に読み取り、生徒のための復習テストを作成してください。
 
     【重要：言語について】
     **全ての質問、選択肢、解説は必ず「日本語」で出力してください。**
 
     【指示】
-    1. **詳細な分析**: 全ての資料内のすべてのテキスト、グラフ、図表のラベルを統合して読み取ってください。
+    1. **詳細な分析**: 資料内のすべてのテキスト、グラフ、図表のラベルを読み取ってください。
     2. **量**: 資料の内容を網羅するように、**30問から40問**の高品質な多肢選択問題を作成してください。
     3. **質**: 単なる用語の暗記だけでなく、グラフの読み取りや因果関係（例：太陽高度と気温の関係）を問う問題を含めてください。
     4. **解説**: なぜその答えが正解なのか、なぜ他が間違いなのかを、小学生〜中学生にもわかるように丁寧に解説してください。
@@ -121,10 +160,10 @@ export const generateQuizFromMedia = async (files: File[]): Promise<Question[]> 
   };
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await genAI.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
-        parts: [...mediaParts, { text: prompt }]
+        parts: [mediaPart, { text: prompt }]
       },
       config: {
         responseMimeType: "application/json",

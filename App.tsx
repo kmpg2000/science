@@ -13,7 +13,7 @@ type AppState = 'home' | 'loading' | 'quiz' | 'result';
 // Versioning Logic
 // In a Vercel environment, VERCEL_GIT_COMMIT_SHA is injected at build time.
 // We use the first 7 characters as a dynamic build ID.
-const APP_VERSION = 'v1.4.0';
+const APP_VERSION = 'v1.3.1';
 // Fix: Cast import.meta to any to satisfy TS compiler regarding 'env' property
 const GIT_SHA = (import.meta as any).env?.VITE_VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || '';
 const BUILD_ID = GIT_SHA ? GIT_SHA.slice(0, 7) : 'dev-' + new Date().toISOString().split('T')[0].replace(/-/g,'');
@@ -171,24 +171,14 @@ const App: React.FC = () => {
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     safePlayClick();
-    const fileList = event.target.files;
-    if (!fileList || fileList.length === 0) return;
-
-    // Validate number of files
-    if (fileList.length > 5) {
-      setUploadError("一度にアップロードできるのは最大5枚までです。");
-      // Reset input value so user can try again
-      event.target.value = '';
-      return;
-    }
-
-    const files = Array.from(fileList);
+    const file = event.target.files?.[0];
+    if (!file) return;
 
     setAppState('loading');
     setUploadError(null);
 
     try {
-      const questions = await generateQuizFromMedia(files);
+      const questions = await generateQuizFromMedia(file);
       if (questions && questions.length > 0) {
         setQuizData(questions);
         setCurrentQuestionIndex(0);
@@ -323,7 +313,6 @@ const App: React.FC = () => {
             <input
               type="file"
               accept="image/*,application/pdf"
-              multiple
               onChange={handleFileUpload}
               className="hidden"
               id="file-upload"
@@ -333,7 +322,7 @@ const App: React.FC = () => {
               className="group relative flex items-center justify-center gap-2 px-6 py-3 bg-white text-gray-900 font-bold text-base cursor-pointer border-2 border-gray-900 shadow-md active:scale-95 transition-all w-full"
             >
               <Upload className="w-4 h-4 text-gray-900" />
-              <span>弐ノ型：資料読込 (最大5枚)</span>
+              <span>弐ノ型：資料読込</span>
               <div className="absolute bottom-0 left-0 h-1 bg-green-700 w-0 group-hover:w-full transition-all duration-300"></div>
             </label>
           </div>
