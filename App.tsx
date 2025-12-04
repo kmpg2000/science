@@ -13,7 +13,7 @@ type AppState = 'home' | 'loading' | 'quiz' | 'result';
 // Versioning Logic
 // In a Vercel environment, VERCEL_GIT_COMMIT_SHA is injected at build time.
 // We use the first 7 characters as a dynamic build ID.
-const APP_VERSION = 'v1.3.1';
+const APP_VERSION = 'v1.4.0';
 // Fix: Cast import.meta to any to satisfy TS compiler regarding 'env' property
 const GIT_SHA = (import.meta as any).env?.VITE_VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || '';
 const BUILD_ID = GIT_SHA ? GIT_SHA.slice(0, 7) : 'dev-' + new Date().toISOString().split('T')[0].replace(/-/g,'');
@@ -129,7 +129,7 @@ const App: React.FC = () => {
   // State Reset Logic
   const resetToHome = () => {
     setAppState('home');
-    setQuizData(DEFAULT_QUIZ_DATA); // Clear generated data
+    setQuizData(DEFAULT_QUIZ_DATA); // Clear generated data and revert to default
     setCurrentQuestionIndex(0);
     setSelectedOption(null);
     setShowFeedback(false);
@@ -171,16 +171,32 @@ const App: React.FC = () => {
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     safePlayClick();
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
 
     setAppState('loading');
     setUploadError(null);
 
+    // Convert FileList to Array
+    const fileArray = Array.from(files).slice(0, 5); // Limit to 5 files
+
     try {
-      const questions = await generateQuizFromMedia(file);
+      const questions = await generateQuizFromMedia(fileArray);
+      
       if (questions && questions.length > 0) {
-        setQuizData(questions);
+        // Re-assign IDs to avoid collision with existing data
+        const startingId = DEFAULT_QUIZ_DATA.length > 0 
+          ? Math.max(...DEFAULT_QUIZ_DATA.map(q => q.id)) + 1 
+          : 1;
+
+        const processedNewQuestions = questions.map((q, index) => ({
+          ...q,
+          id: startingId + index
+        }));
+
+        // Append to default data instead of replacing
+        setQuizData([...DEFAULT_QUIZ_DATA, ...processedNewQuestions]);
+        
         setCurrentQuestionIndex(0);
         setScore(0);
         setSelectedOption(null);
@@ -314,6 +330,7 @@ const App: React.FC = () => {
               type="file"
               accept="image/*,application/pdf"
               onChange={handleFileUpload}
+              multiple // Allow multiple files
               className="hidden"
               id="file-upload"
             />
@@ -322,7 +339,7 @@ const App: React.FC = () => {
               className="group relative flex items-center justify-center gap-2 px-6 py-3 bg-white text-gray-900 font-bold text-base cursor-pointer border-2 border-gray-900 shadow-md active:scale-95 transition-all w-full"
             >
               <Upload className="w-4 h-4 text-gray-900" />
-              <span>弐ノ型：資料読込</span>
+              <span>弐ノ型：資料読込 (最大5枚)</span>
               <div className="absolute bottom-0 left-0 h-1 bg-green-700 w-0 group-hover:w-full transition-all duration-300"></div>
             </label>
           </div>
@@ -360,7 +377,10 @@ const App: React.FC = () => {
         問題を生成中...
       </h2>
       <p className="text-base text-gray-600 font-maru">
-        全集中・思考の呼吸...
+        全集中・思考の呼吸...<br/>
+        <span className="text-xs text-gray-500 mt-2 block">
+          (資料が多い場合、5分程度かかることがあります)
+        </span>
       </p>
     </div>
   );

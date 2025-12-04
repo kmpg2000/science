@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Chat, Type, Schema } from "@google/genai";
-import { TEACHER_SYSTEM_INSTRUCTION } from '../constants';
+import { TEACHER_SYSTEM_INSTRUCTION, QUIZ_DATA } from '../constants';
 import { Question, QuestionCategory } from '../types';
 
 let chatSession: Chat | null = null;
@@ -92,24 +93,30 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
   });
 };
 
-export const generateQuizFromMedia = async (file: File): Promise<Question[]> => {
+export const generateQuizFromMedia = async (files: File | File[]): Promise<Question[]> => {
   const apiKey = getApiKey();
   if (!genAI) initializeGemini();
   if (!genAI || !apiKey) {
     throw new Error("APIキーが見つかりません。環境設定を確認してください。");
   }
 
-  // File size check (Client-side limit precaution, though Gemini supports up to 20MB usually)
-  if (file.size > 20 * 1024 * 1024) {
-    throw new Error("ファイルサイズが大きすぎます。20MB以下のファイルを選択してください。");
+  const fileList = Array.isArray(files) ? files : [files];
+  const parts: any[] = [];
+
+  for (const file of fileList) {
+    if (file.size > 20 * 1024 * 1024) {
+      throw new Error(`ファイル ${file.name} が大きすぎます。20MB以下のファイルを選択してください。`);
+    }
+    try {
+      const part = await fileToGenerativePart(file);
+      parts.push(part);
+    } catch (e) {
+      throw new Error(`ファイル ${file.name} の読み込みに失敗しました。`);
+    }
   }
 
-  let mediaPart;
-  try {
-    mediaPart = await fileToGenerativePart(file);
-  } catch (e) {
-    throw new Error("ファイルの読み込みに失敗しました。");
-  }
+  // Extract existing questions to avoid duplicates
+  const existingQuestions = QUIZ_DATA.map(q => q.text).join("\n");
 
   const prompt = `
     あなたは非常に厳格で優秀な日本の「理科の先生」です。
@@ -118,12 +125,17 @@ export const generateQuizFromMedia = async (file: File): Promise<Question[]> => 
     【重要：言語について】
     **全ての質問、選択肢、解説は必ず「日本語」で出力してください。**
 
+    【除外リスト】
+    以下の質問は既に存在します。これらと内容が完全に重複する問題は作成しないでください（似ているが違う視点の問題はOKです）：
+    ${existingQuestions.slice(0, 5000)}... (省略)
+
     【指示】
     1. **詳細な分析**: 資料内のすべてのテキスト、グラフ、図表のラベルを読み取ってください。
-    2. **量**: 資料の内容を網羅するように、**30問から40問**の高品質な多肢選択問題を作成してください。
+    2. **量**: 資料の内容を網羅するように、**50問から80問**の高品質な多肢選択問題を作成してください。
+       - 出力が途切れないよう、解説は簡潔かつ的確にまとめてください。
     3. **質**: 単なる用語の暗記だけでなく、グラフの読み取りや因果関係（例：太陽高度と気温の関係）を問う問題を含めてください。
-    4. **解説**: なぜその答えが正解なのか、なぜ他が間違いなのかを、小学生〜中学生にもわかるように丁寧に解説してください。
-    5. **カテゴリ**: 以下のいずれかを割り当ててください：'天体・季節', '光と影', '生物'。
+    4. **解説**: なぜその答えが正解なのかを、小学生〜中学生にもわかるように丁寧に解説してください。
+    5. **カテゴリ**: 以下のいずれかを割り当ててください：'天体・季節', '光と影', '生物', 'その他'。
 
     【最重要：図表問題のテキスト化（NO_VISUAL_REFERENCES）】
     - ユーザーは問題を解く際に、元の画像を見ることができません。
@@ -131,6 +143,7 @@ export const generateQuizFromMedia = async (file: File): Promise<Question[]> => 
     - **図やグラフの状況を「文章」で説明して問題にしてください。**
       - 悪い例：「図1のAの位置にあるとき、季節はどれか？」
       - 良い例：「地球の地軸が太陽の方向に傾いているとき、北半球の季節はどうなるか？」
+      - 良い例：「気温のグラフが14時ごろにピークになっているとき、地温のピークはいつ頃か？」
 
     JSON形式の配列で出力してください。Markdown記法は含めないでください。
   `;
@@ -163,12 +176,12 @@ export const generateQuizFromMedia = async (file: File): Promise<Question[]> => 
     const response = await genAI.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
-        parts: [mediaPart, { text: prompt }]
+        parts: [...parts, { text: prompt }]
       },
       config: {
         responseMimeType: "application/json",
         responseSchema: quizSchema,
-        maxOutputTokens: 32768,
+        maxOutputTokens: 32768, // Max tokens to allow large response (100+ questions)
         thinkingConfig: { thinkingBudget: 0 }, 
       }
     });
@@ -193,7 +206,7 @@ export const generateQuizFromMedia = async (file: File): Promise<Question[]> => 
     }
 
     return rawData.map((q: any) => ({
-      id: q.id,
+      id: q.id, // ID will be reassigned in App.tsx to ensure uniqueness
       category: q.category as QuestionCategory,
       text: q.text,
       options: q.options,
