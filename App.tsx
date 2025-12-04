@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { QuizCard } from './components/QuizCard';
 import { ResultSummary } from './components/ResultSummary';
@@ -10,6 +9,14 @@ import { MessageCircle, Scroll, Upload, Sword, Sparkles, Loader2, Home, Wind, Us
 import { playCorrect, playIncorrect, playClick, playDrum } from './utils/sound';
 
 type AppState = 'home' | 'loading' | 'quiz' | 'result';
+
+// Versioning Logic
+// In a Vercel environment, VERCEL_GIT_COMMIT_SHA is injected at build time.
+// We use the first 7 characters as a dynamic build ID.
+const APP_VERSION = 'v1.3.1';
+// Fix: Cast import.meta to any to satisfy TS compiler regarding 'env' property
+const GIT_SHA = (import.meta as any).env?.VITE_VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_SHA || '';
+const BUILD_ID = GIT_SHA ? GIT_SHA.slice(0, 7) : 'dev-' + new Date().toISOString().split('T')[0].replace(/-/g,'');
 
 const ENCOURAGEMENT_MESSAGES = [
   "全集中！その調子だ！",
@@ -40,13 +47,29 @@ const App: React.FC = () => {
 
   const currentQuestion = quizData[currentQuestionIndex];
 
-  // Simulated visitor counter effect
+  // Persistent visitor counter logic
   useEffect(() => {
-    // Generate a number based on current time to simulate a growing counter
-    const base = 12000;
-    const timeFactor = Math.floor(Date.now() / 600000); // Changes every 10 mins approx
-    const randomOffset = Math.floor(Math.random() * 50);
-    setVisitorCount((base + timeFactor + randomOffset).toLocaleString());
+    const STORAGE_KEY = 'science_quiz_visitor_count';
+    const INITIAL_BASE = 12850;
+    
+    // Retrieve previous count or initialize
+    let currentCount = parseInt(localStorage.getItem(STORAGE_KEY) || '0', 10);
+    
+    // If it's the very first time (or storage cleared), set a base
+    if (currentCount === 0) {
+      currentCount = INITIAL_BASE;
+    }
+
+    // Increment logic:
+    // Every time the user visits/reloads, we add 1 (the user themselves)
+    // PLUS a random number (1-5) to simulate other people visiting in the meantime.
+    // This ensures the number always goes up on reload.
+    const increment = 1 + Math.floor(Math.random() * 5);
+    const newCount = currentCount + increment;
+    
+    // Save and update state
+    localStorage.setItem(STORAGE_KEY, newCount.toString());
+    setVisitorCount(newCount.toLocaleString());
   }, []);
 
   // Helper to play sound safely without blocking execution
@@ -165,11 +188,12 @@ const App: React.FC = () => {
         setAppState('quiz');
         try { playDrum(); } catch (e) {}
       } else {
-        throw new Error("問題が生成できませんでした");
+        throw new Error("問題データが空でした。");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setUploadError("問題の生成に失敗しました。別のファイルを試してください。");
+      // Use the specific error message from the service
+      setUploadError(err.message || "問題の生成に失敗しました。別のファイルを試してください。");
       setAppState('home');
     }
   };
@@ -309,6 +333,10 @@ const App: React.FC = () => {
             {uploadError}
           </p>
         )}
+
+        <div className="mt-4 text-[10px] text-gray-400 font-mono text-center">
+          {APP_VERSION} <span className="text-gray-300">({BUILD_ID})</span>
+        </div>
       </div>
 
       <div className="bg-white/90 p-4 border-2 border-gray-800 max-w-xs mx-auto transform -rotate-1 shadow-md">

@@ -5,17 +5,39 @@ import { Question, QuestionCategory } from '../types';
 let chatSession: Chat | null = null;
 let genAI: GoogleGenAI | null = null;
 
+// Helper to reliably find the API Key in various environments (Vite, Vercel, etc.)
+const getApiKey = (): string | undefined => {
+  // 1. Try standard process.env (Node/Webpack/Next.js)
+  if (typeof process !== 'undefined' && process.env?.API_KEY) {
+    return process.env.API_KEY;
+  }
+  // 2. Try Vite specific import.meta.env
+  // @ts-ignore
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
+    // @ts-ignore
+    return import.meta.env.VITE_API_KEY;
+  }
+  // 3. Try Vercel System Env accessed via standard env var in some configs
+  if (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_KEY) {
+    return process.env.NEXT_PUBLIC_API_KEY;
+  }
+  
+  return undefined;
+};
+
 export const initializeGemini = () => {
-  if (!process.env.API_KEY) {
-    console.error("API Key is missing");
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    console.error("API Key is missing. Please set VITE_API_KEY or API_KEY in your environment variables.");
     return;
   }
-  genAI = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  genAI = new GoogleGenAI({ apiKey });
 };
 
 export const getTeacherResponse = async (userMessage: string): Promise<string> => {
-  if (!process.env.API_KEY) {
-    return "APIキーが設定されていません。環境変数を確認してください。";
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return "システムエラー: APIキーが設定されていません。管理者にお問い合わせください。";
   }
 
   if (!genAI) {
@@ -38,9 +60,15 @@ export const getTeacherResponse = async (userMessage: string): Promise<string> =
 
     const result = await chatSession.sendMessage({ message: userMessage });
     return result.text || "すみません、うまく答えられませんでした。もう一度聞いてくれますか？";
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    return "申し訳ありません。現在、先生は少し忙しいようです（エラーが発生しました）。";
+  } catch (error: any) {
+    console.error("Gemini Chat Error:", error);
+    
+    // Friendly error handling
+    if (error.message?.includes('429')) {
+      return "申し訳ありません。現在、質問が殺到しておりAIが少し疲れているようです。少し時間を置いてから話しかけてください。";
+    }
+    
+    return "申し訳ありません。通信エラーが発生しました。もう一度試してみてください。";
   }
 };
 
@@ -50,6 +78,7 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64Data = reader.result as string;
+      // Extract the base64 string (remove "data:image/png;base64," prefix)
       const base64Content = base64Data.split(',')[1];
       resolve({
         inlineData: {
@@ -64,34 +93,46 @@ const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: s
 };
 
 export const generateQuizFromMedia = async (file: File): Promise<Question[]> => {
+  const apiKey = getApiKey();
   if (!genAI) initializeGemini();
-  if (!genAI) throw new Error("GenAI not initialized");
+  if (!genAI || !apiKey) {
+    throw new Error("APIキーが見つかりません。環境設定を確認してください。");
+  }
 
-  const mediaPart = await fileToGenerativePart(file);
+  // File size check (Client-side limit precaution, though Gemini supports up to 20MB usually)
+  if (file.size > 20 * 1024 * 1024) {
+    throw new Error("ファイルサイズが大きすぎます。20MB以下のファイルを選択してください。");
+  }
 
-  // Updated prompt to handle visual-to-text conversion and high quantity/quality
+  let mediaPart;
+  try {
+    mediaPart = await fileToGenerativePart(file);
+  } catch (e) {
+    throw new Error("ファイルの読み込みに失敗しました。");
+  }
+
   const prompt = `
-    You are a highly precise and strict science tutor.
-    Your task is to generate a comprehensive review quiz based *strictly* on the provided document (image or PDF).
+    あなたは非常に厳格で優秀な日本の「理科の先生」です。
+    提供された画像（資料やテスト）の内容を詳細に読み取り、生徒のための復習テストを作成してください。
 
-    INSTRUCTIONS:
-    1. **Deep Analysis**: Read every text, label, graph axis, and diagram detail in the provided file.
-    2. **Quantity**: Create **30 to 40** distinct, high-quality multiple-choice questions. It is critical to generate at least 30 questions. Cover every topic found in the document to the fullest extent.
-    3. **Quality**: Prioritize questions that test understanding of relationships (e.g., how the sun's angle affects temperature, interpreting graph trends) rather than just simple fact recall. Ensure distinct distractors (wrong answers).
-    4. **Accuracy**: Ensure the correct answer is indisputably supported by the document content.
-    5. **Explanation**: Provide a helpful, educational explanation for students (why the answer is right and others are wrong).
-    6. **Categories**: Assign one of these categories: '天体・季節', '光と影', '生物'.
+    【重要：言語について】
+    **全ての質問、選択肢、解説は必ず「日本語」で出力してください。**
 
-    CRITICAL RULE FOR VISUALS (NO_VISUAL_REFERENCES):
-    - The user CANNOT see the original image/PDF while taking the quiz.
-    - **DO NOT** write questions that say "Look at Figure 1", "As shown in Graph A", or "Which symbol in the diagram...".
-    - **INSTEAD, CONVERT VISUALS TO TEXT**: Describe the visual scenario within the question text itself.
-      - BAD: "What does Figure 1 show?"
-      - GOOD: "In a diagram where the Earth's axis is tilted towards the Sun, which season is represented?"
-      - BAD: "Which of A, B, C in the graph represents Winter?"
-      - GOOD: "In a graph showing sun altitude, which curve represents the season with the lowest peak altitude (Winter)?"
+    【指示】
+    1. **詳細な分析**: 資料内のすべてのテキスト、グラフ、図表のラベルを読み取ってください。
+    2. **量**: 資料の内容を網羅するように、**30問から40問**の高品質な多肢選択問題を作成してください。
+    3. **質**: 単なる用語の暗記だけでなく、グラフの読み取りや因果関係（例：太陽高度と気温の関係）を問う問題を含めてください。
+    4. **解説**: なぜその答えが正解なのか、なぜ他が間違いなのかを、小学生〜中学生にもわかるように丁寧に解説してください。
+    5. **カテゴリ**: 以下のいずれかを割り当ててください：'天体・季節', '光と影', '生物'。
 
-    Return the response strictly as a JSON array matching the schema.
+    【最重要：図表問題のテキスト化（NO_VISUAL_REFERENCES）】
+    - ユーザーは問題を解く際に、元の画像を見ることができません。
+    - **「図1を見て答えなさい」や「グラフAの記号はどれか」といった問題は絶対に作らないでください。**
+    - **図やグラフの状況を「文章」で説明して問題にしてください。**
+      - 悪い例：「図1のAの位置にあるとき、季節はどれか？」
+      - 良い例：「地球の地軸が太陽の方向に傾いているとき、北半球の季節はどうなるか？」
+
+    JSON形式の配列で出力してください。Markdown記法は含めないでください。
   `;
 
   const quizSchema: Schema = {
@@ -127,20 +168,30 @@ export const generateQuizFromMedia = async (file: File): Promise<Question[]> => 
       config: {
         responseMimeType: "application/json",
         responseSchema: quizSchema,
-        // Increased thinking budget for deeper analysis of the document
-        thinkingConfig: {
-          thinkingBudget: 4096, 
-        },
-        // Significantly increased maxOutputTokens to allow for 30-40 JSON objects
-        maxOutputTokens: 32768, 
+        maxOutputTokens: 32768,
+        thinkingConfig: { thinkingBudget: 0 }, 
       }
     });
 
     const jsonText = response.text;
-    if (!jsonText) throw new Error("No data returned");
+    if (!jsonText) throw new Error("AIからの応答が空でした。");
     
-    // Parse and map to ensure types align (Schema returns strings/ints, we cast to Question interface)
-    const rawData = JSON.parse(jsonText);
+    // Cleaning
+    const cleanedText = jsonText.replace(/```json\n?|```/g, '').trim();
+    
+    // Parse
+    let rawData;
+    try {
+      rawData = JSON.parse(cleanedText);
+    } catch (e) {
+      console.error("JSON Parse Error. Raw text:", jsonText);
+      throw new Error("AIの応答データの解析に失敗しました。");
+    }
+    
+    if (!Array.isArray(rawData)) {
+      throw new Error("AIの応答形式が不正です（配列ではありません）。");
+    }
+
     return rawData.map((q: any) => ({
       id: q.id,
       category: q.category as QuestionCategory,
@@ -150,8 +201,25 @@ export const generateQuizFromMedia = async (file: File): Promise<Question[]> => 
       explanation: q.explanation
     })) as Question[];
 
-  } catch (error) {
-    console.error("Quiz Generation Error:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("Quiz Generation Error Details:", error);
+
+    // Specific error messaging for the user
+    const errorMsg = error.toString().toLowerCase();
+    
+    if (errorMsg.includes('429')) {
+      throw new Error("APIの利用制限（クオータ）を超過しました。しばらく時間をおいて試すか、APIキーを確認してください。");
+    }
+    if (errorMsg.includes('403') || errorMsg.includes('key not valid')) {
+      throw new Error("APIキーが無効、または許可されていません。");
+    }
+    if (errorMsg.includes('candidate was blocked') || errorMsg.includes('safety')) {
+      throw new Error("コンテンツがAIの安全基準によりブロックされました。別の画像を試してください。");
+    }
+    if (errorMsg.includes('fail to fetch') || errorMsg.includes('network')) {
+      throw new Error("通信エラーです。インターネット接続を確認してください。");
+    }
+
+    throw new Error(`問題の生成に失敗しました: ${error.message || "不明なエラー"}`);
   }
 };
